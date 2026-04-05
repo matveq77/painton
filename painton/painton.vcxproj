@@ -94,9 +94,17 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Shape.cpp" />
+    <ClCompile Include="Rectangle.cpp" />
+    <ClCompile Include="Circle.cpp" />
+    <ClCompile Include="Line.cpp" />
+    <ClCompile Include="Freehand.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Shape.h" />
+    <ClInclude Include="Rectangle.h" />
+    <ClInclude Include="Circle.h" />
+    <ClInclude Include="Line.h" />
+    <ClInclude Include="Freehand.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

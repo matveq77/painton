@@ -12,29 +12,29 @@
 #include <QPainterPath>
 #include <QPainterPathStroker>
 #include <Shape.h>
+#include <Rectangle.h>
+#include <Circle.h>
+#include <Line.h>
+#include <Freehand.h>
 
 class PaintWidget : public QWidget {
 public:
     enum Mode {
-        FreeHand,
-        Line,
-        Circle,
-        Rect,
+        Rectangle = Shape::Rectangle,
+        Circle = Shape::Circle,
+        Line = Shape::Line,
+        Freehand = Shape::Freehand,
         Move
-    };
-
-    struct Shape {
-        Mode mode;
-        QRect rect;
-        QPolygon points;
-        QPoint lineStart;
-        QPoint lineEnd;
     };
 
     PaintWidget(QWidget* parent = nullptr) : QWidget(parent) {
         drawing = false;
-        currentMode = FreeHand;
+        currentMode = Freehand;
         selectedShapeIndex = -1;
+    }
+
+    ~PaintWidget() {
+        qDeleteAll(shapes);
     }
 
     void setMode(Mode mode) {
@@ -44,6 +44,7 @@ public:
     }
 
     void clearAll() {
+        qDeleteAll(shapes);
         shapes.clear();
         selectedShapeIndex = -1;
         update();
@@ -58,7 +59,8 @@ public:
             QDataStream out(&file);
             out << (int)shapes.size();
             for (const auto& s : shapes) {
-                out << (int)s.mode << s.rect << s.points << s.lineStart << s.lineEnd;
+                out << (int)s->getType();
+                s->serialize(out);
             }
             file.close();
         }
@@ -70,16 +72,20 @@ public:
 
         QFile file(fileName);
         if (file.open(QIODevice::ReadOnly)) {
+            qDeleteAll(shapes);
             shapes.clear();
             QDataStream in(&file);
             int size;
             in >> size;
             for (int i = 0; i < size; ++i) {
-                Shape s;
-                int m;
-                in >> m >> s.rect >> s.points >> s.lineStart >> s.lineEnd;
-                s.mode = (Mode)m;
-                shapes.append(s);
+                int typeInt;
+                in >> typeInt;
+                Shape::Type type = (Shape::Type)typeInt;
+                Shape* s = Shape::createFromType(type);
+                if (s) {
+                    s->deserialize(in);
+                    shapes.append(s);
+                }
             }
             file.close();
             selectedShapeIndex = -1;
@@ -99,18 +105,17 @@ protected:
             else
                 painter.setPen(QPen(Qt::black, 2, Qt::SolidLine));
 
-            drawSingleShape(painter, shapes[i]);
+            shapes[i]->draw(painter);
         }
 
         if (drawing && currentMode != Move) {
             painter.setPen(QPen(Qt::black, 2, Qt::DashLine));
-            Shape tempShape;
-            tempShape.mode = currentMode;
-            tempShape.rect = QRect(startPoint, currentPoint).normalized();
-            tempShape.lineStart = startPoint;
-            tempShape.lineEnd = currentPoint;
-            tempShape.points = currentPoly;
-            drawSingleShape(painter, tempShape);
+            Shape* tempShape = Shape::createFromType(static_cast<Shape::Type>(currentMode));
+            if (tempShape) {
+                tempShape->setFromPoints(startPoint, currentPoint, currentPoly);
+                tempShape->draw(painter);
+                delete tempShape;
+            }
         }
     }
 
@@ -122,7 +127,7 @@ protected:
             if (currentMode == Move) {
                 selectedShapeIndex = -1;
                 for (int i = shapes.size() - 1; i >= 0; --i) {
-                    if (isPointInShape(event->pos(), shapes[i])) {
+                    if (shapes[i]->isPointInShape(event->pos())) {
                         selectedShapeIndex = i;
                         lastMousePos = event->pos();
                         break;
@@ -131,7 +136,7 @@ protected:
             }
             else {
                 drawing = true;
-                if (currentMode == FreeHand) {
+                if (currentMode == Freehand) {
                     currentPoly.clear();
                     currentPoly << event->pos();
                 }
@@ -144,12 +149,12 @@ protected:
         if (event->buttons() & Qt::LeftButton) {
             if (currentMode == Move && selectedShapeIndex != -1) {
                 QPoint delta = event->pos() - lastMousePos;
-                moveShape(shapes[selectedShapeIndex], delta);
+                shapes[selectedShapeIndex]->move(delta);
                 lastMousePos = event->pos();
             }
             else if (drawing) {
                 currentPoint = event->pos();
-                if (currentMode == FreeHand) {
+                if (currentMode == Freehand) {
                     currentPoly << event->pos();
                 }
             }
@@ -161,13 +166,11 @@ protected:
         if (event->button() == Qt::LeftButton) {
             selectedShapeIndex = -1;
             if (drawing) {
-                Shape newShape;
-                newShape.mode = currentMode;
-                newShape.rect = QRect(startPoint, event->pos()).normalized();
-                newShape.lineStart = startPoint;
-                newShape.lineEnd = event->pos();
-                newShape.points = currentPoly;
-                shapes.append(newShape);
+                Shape* newShape = Shape::createFromType(static_cast<Shape::Type>(currentMode));
+                if (newShape) {
+                    newShape->setFromPoints(startPoint, event->pos(), currentPoly);
+                    shapes.append(newShape);
+                }
                 drawing = false;
             }
             update();
@@ -175,67 +178,7 @@ protected:
     }
 
 private:
-    void drawSingleShape(QPainter& painter, const Shape& s) {
-        switch (s.mode) {
-            case Line:     painter.drawLine(s.lineStart, s.lineEnd); break;
-            case Rect:     painter.drawRect(s.rect); break;
-            case Circle:   painter.drawEllipse(s.rect); break;
-            case FreeHand: painter.drawPolyline(s.points); break;
-            default: break;
-        }
-    }
-
-    bool isPointInShape(QPoint p, const Shape& s) {
-        if (s.mode == Rect) {
-            return s.rect.contains(p);
-        }
-        else if (s.mode == Circle) {
-            if (s.rect.width() <= 0 || s.rect.height() <= 0) return false;
-
-            QPointF center = s.rect.center();
-
-            double rx = s.rect.width() / 2.0;
-            double ry = s.rect.height() / 2.0;
-
-            double dx = p.x() - center.x();
-            double dy = p.y() - center.y();
-
-            return (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0;
-        }
-        else if (s.mode == Line) {
-            QPainterPath path;
-            path.moveTo(s.lineStart);
-            path.lineTo(s.lineEnd);
-
-            QPainterPathStroker stroker;
-            stroker.setWidth(10);
-            QPainterPath outline = stroker.createStroke(path);
-
-            return outline.contains(p);
-        }
-        else if (s.mode == FreeHand) {
-            if (s.points.isEmpty()) return false;
-
-            QPainterPath path;
-            path.addPolygon(s.points);
-
-            QPainterPathStroker stroker;
-            stroker.setWidth(10);
-            QPainterPath outline = stroker.createStroke(path);
-
-            return outline.contains(p);
-        }
-        return false;
-    }
-
-    void moveShape(Shape& s, QPoint delta) {
-        s.rect.translate(delta);
-        s.lineStart += delta;
-        s.lineEnd += delta;
-        s.points.translate(delta);
-    }
-
-    QList<Shape> shapes;
+    QList<Shape*> shapes;
     bool drawing;
     QPoint startPoint;
     QPoint currentPoint;
@@ -275,9 +218,9 @@ int main(int argc, char* argv[])
     buttonLayout->addWidget(btnSave);
     buttonLayout->addWidget(btnLoad);
 
-    QObject::connect(btnFree, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::FreeHand); });
+    QObject::connect(btnFree, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::Freehand); });
     QObject::connect(btnLine, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::Line); });
-    QObject::connect(btnRect, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::Rect); });
+    QObject::connect(btnRect, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::Rectangle); });
     QObject::connect(btnCirc, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::Circle); });
     QObject::connect(btnMove, &QPushButton::clicked, [=]() { paintArea->setMode(PaintWidget::Move); });
     QObject::connect(btnClear, &QPushButton::clicked, [=]() { paintArea->clearAll(); });
