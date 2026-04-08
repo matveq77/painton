@@ -31,7 +31,7 @@ public:
         Delete
     };
 
-    PaintWidget(QWidget* parent = nullptr) : QWidget(parent) {
+    PaintWidget(QWidget* parent = nullptr) : QWidget(parent), db({ "localhost", 5432, "painton", "postgres", "postgres" }) {
         drawing = false;
         currentAction = Action::Draw;
         currentShapeType = Shape::Freehand;

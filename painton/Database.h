@@ -13,7 +13,15 @@ public:
         QString name;
     };
 
-    Database(const QString& path = "paint_data.db");
+    struct ConnectionDetails {
+        QString host;
+        int port;
+        QString dbName;
+        QString user;
+        QString password;
+    };
+
+    Database(const ConnectionDetails& details);
     ~Database();
 
     bool open();
@@ -27,6 +35,6 @@ public:
 
 private:
     QSqlDatabase m_db;
-    QString m_path;
+    ConnectionDetails m_details;
     QByteArray serializeSingleShape(Shape* shape);
 };
