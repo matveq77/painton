@@ -72,6 +72,12 @@ public:
         update();
     }
 
+    void createNewDrawing() {
+        clearAll();
+        currentId = -1;
+        currentName = "";
+    }
+
     void saveToFile() {
         QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "Paint Files (*.pnt)");
         if (fileName.isEmpty()) return;
@@ -113,24 +119,51 @@ public:
     }
 
     void saveToDatabase() {
-        bool ok;
-        QString name = QInputDialog::getText(this, "DB Save", "Name:", QLineEdit::Normal, "", &ok);
-        if (ok && !name.isEmpty()) {
-            db.saveDrawing(name, shapes);
+        if (currentId == -1) {
+            bool ok;
+            QString name = QInputDialog::getText(this, "Save", "Name:", QLineEdit::Normal, "Untitled", &ok);
+            if (!ok) return;
+            currentName = name.isEmpty() ? "Untitled" : name;
         }
+
+        db.saveDrawing(currentId, currentName, shapes);
     }
 
     void loadFromDatabase() {
-        QStringList items = db.getSavedDrawingNames();
+        QList<Database::DrawingInfo> items = db.getSavedDrawings();
         if (items.isEmpty()) return;
 
+        QStringList displayList;
+        for (const auto& info : items) {
+            int displayId = info.id - 1;
+
+            if (displayId == 0) {
+                displayList << info.name;
+            }
+            else {
+                displayList << QString("%1(%2)").arg(info.name).arg(displayId);
+            }
+        }
+
         bool ok;
-        QString item = QInputDialog::getItem(this, "DB Load", "Choose:", items, 0, false, &ok);
-        if (ok && !item.isEmpty()) {
+        QString res = QInputDialog::getItem(this, "Load", "Select:", displayList, 0, false, &ok);
+        if (ok && !res.isEmpty()) {
+            int index = displayList.indexOf(res);
+            Database::DrawingInfo selected = items[index];
+
             qDeleteAll(shapes);
-            shapes = db.loadDrawing(item);
-            selectedShapeIndex = -1;
+            shapes = db.loadDrawing(selected.id);
+
+            currentId = selected.id;
+            currentName = selected.name;
+
             update();
+        }
+    }
+
+    void clearDatabase() {
+        if (db.clearDatabase()) {
+            qDebug() << "Database cleared";
         }
     }
 
@@ -242,7 +275,10 @@ private:
     Shape::Type currentShapeType;
 
     int selectedShapeIndex;
+
     Database db;
+    int currentId = -1;
+    QString currentName = "";
 };
 
 int main(int argc, char* argv[])
@@ -257,10 +293,13 @@ int main(int argc, char* argv[])
     QHBoxLayout* buttonLayout = new QHBoxLayout();
     PaintWidget* paintArea = new PaintWidget();
 
+    QPushButton* btnCreateNew = new QPushButton("Create new");
+
     QPushButton* btnFree = new QPushButton("Free");
     QPushButton* btnLine = new QPushButton("Line");
     QPushButton* btnRect = new QPushButton("Reactangle");
     QPushButton* btnCirc = new QPushButton("Circle");
+
     QPushButton* btnMove = new QPushButton("Move");
     QPushButton* btnDel = new QPushButton("Delete");
     QPushButton* btnClear = new QPushButton("Clear");
@@ -269,7 +308,10 @@ int main(int argc, char* argv[])
     QPushButton* btnLoad = new QPushButton("Open(File)");
     QPushButton* btnSaveDb = new QPushButton("Save(Db)");
     QPushButton* btnLoadDb = new QPushButton("Open(Db)");
+    QPushButton* btnClearDb = new QPushButton("Clear(Db)");
 
+    buttonLayout->addWidget(btnCreateNew);
+    buttonLayout->addSpacing(8);
     buttonLayout->addWidget(btnFree);
     buttonLayout->addWidget(btnLine);
     buttonLayout->addWidget(btnRect);
@@ -283,6 +325,9 @@ int main(int argc, char* argv[])
     buttonLayout->addWidget(btnLoad);
     buttonLayout->addWidget(btnSaveDb);
     buttonLayout->addWidget(btnLoadDb);
+    buttonLayout->addWidget(btnClearDb);
+
+    QObject::connect(btnCreateNew, &QPushButton::clicked, [=]() { paintArea->createNewDrawing(); });
 
     QObject::connect(btnFree, &QPushButton::clicked, [=]() { paintArea->setDrawMode(Shape::Freehand); });
     QObject::connect(btnLine, &QPushButton::clicked, [=]() { paintArea->setDrawMode(Shape::Line); });
@@ -297,6 +342,7 @@ int main(int argc, char* argv[])
     QObject::connect(btnLoad, &QPushButton::clicked, [=]() { paintArea->loadFromFile(); });
     QObject::connect(btnSaveDb, &QPushButton::clicked, [=]() { paintArea->saveToDatabase(); });
     QObject::connect(btnLoadDb, &QPushButton::clicked, [=]() { paintArea->loadFromDatabase(); });
+    QObject::connect(btnClearDb, &QPushButton::clicked, [=]() { paintArea->clearDatabase(); });
 
     mainLayout->addLayout(buttonLayout);
     mainLayout->addWidget(paintArea);
