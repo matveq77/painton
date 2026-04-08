@@ -6,13 +6,13 @@
 #include <QBuffer>
 #include <QDebug>
 
-Database::Database(const ConnectionDetails& details) : m_details(details) {
-    m_db = QSqlDatabase::addDatabase("QPSQL");
-    m_db.setHostName(m_details.host);
-    m_db.setPort(m_details.port);
-    m_db.setDatabaseName(m_details.dbName);
-    m_db.setUserName(m_details.user);
-    m_db.setPassword(m_details.password);
+Database::Database(const ConnectionDetails& details) : details(details) {
+    db = QSqlDatabase::addDatabase("QPSQL");
+    db.setHostName(details.host);
+    db.setPort(details.port);
+    db.setDatabaseName(details.dbName);
+    db.setUserName(details.user);
+    db.setPassword(details.password);
 }
 
 Database::~Database() {
@@ -20,51 +20,52 @@ Database::~Database() {
 }
 
 bool Database::open() {
-    if (!m_db.open()) {
-        qDebug() << "Error: connection with database fail" << m_db.lastError();
-        return false;
-    }
+    if (!db.open()) return false;
 
     QSqlQuery query;
+    query.exec("CREATE TABLE IF NOT EXISTS drawings (id SERIAL PRIMARY KEY, name TEXT);");
 
-    if (!query.exec("CREATE TABLE IF NOT EXISTS drawings ("
+    query.exec("CREATE TABLE IF NOT EXISTS shapes ("
         "id SERIAL PRIMARY KEY, "
-        "name TEXT);")) {
-        qDebug() << "DataBase: error creating drawings table" << query.lastError();
-        return false;
-    }
-
-    if (!query.exec("CREATE TABLE IF NOT EXISTS shapes ("
-        "id SERIAL PRIMARY KEY, "
-        "drawing_id INTEGER, "
+        "drawing_id INTEGER REFERENCES drawings(id) ON DELETE CASCADE, "
         "shape_type INTEGER, "
-        "shape_data BYTEA, "
-        "z_order INTEGER, "
-        "FOREIGN KEY(drawing_id) REFERENCES drawings(id) ON DELETE CASCADE);")) {
-        qDebug() << "DataBase: error creating shapes table" << query.lastError();
-        return false;
-    }
+        "z_order INTEGER);");
+
+    query.exec("CREATE TABLE IF NOT EXISTS rect_data ("
+        "shape_id INTEGER PRIMARY KEY REFERENCES shapes(id) ON DELETE CASCADE, "
+        "x INTEGER, y INTEGER, width INTEGER, height INTEGER);");
+
+    query.exec("CREATE TABLE IF NOT EXISTS circle_data ("
+        "shape_id INTEGER PRIMARY KEY REFERENCES shapes(id) ON DELETE CASCADE, "
+        "x INTEGER, y INTEGER, width INTEGER, height INTEGER);");
+
+    query.exec("CREATE TABLE IF NOT EXISTS line_data ("
+        "shape_id INTEGER PRIMARY KEY REFERENCES shapes(id) ON DELETE CASCADE, "
+        "x1 INTEGER, y1 INTEGER, x2 INTEGER, y2 INTEGER);");
+
+    query.exec("CREATE TABLE IF NOT EXISTS freehand_data ("
+        "shape_id INTEGER PRIMARY KEY REFERENCES shapes(id) ON DELETE CASCADE, "
+        "points_blob BYTEA);");
 
     return true;
 }
 
 void Database::close() {
-    if (m_db.isOpen()) {
-        m_db.close();
+    if (db.isOpen()) {
+        db.close();
     }
 }
 
 bool Database::saveDrawing(int& id, const QString& name, const QList<Shape*>& shapes) {
-    if (!m_db.transaction()) return false;
+    if (!db.transaction()) return false;
 
     QSqlQuery query;
 
     if (id == -1) {
         query.prepare("INSERT INTO drawings (name) VALUES (:name) RETURNING id");
         query.bindValue(":name", name);
-
         if (!query.exec() || !query.next()) {
-            m_db.rollback();
+            db.rollback();
             return false;
         }
         id = query.value(0).toInt();
@@ -73,53 +74,62 @@ bool Database::saveDrawing(int& id, const QString& name, const QList<Shape*>& sh
         query.prepare("UPDATE drawings SET name = :name WHERE id = :id");
         query.bindValue(":name", name);
         query.bindValue(":id", id);
-
         if (!query.exec()) {
-            m_db.rollback();
+            db.rollback();
             return false;
         }
-
         query.prepare("DELETE FROM shapes WHERE drawing_id = :id");
         query.bindValue(":id", id);
-
-        if (!query.exec()) {
-            m_db.rollback();
-            return false;
-        }
+        query.exec();
     }
-
-    query.prepare("INSERT INTO shapes (drawing_id, shape_type, shape_data, z_order) "
-        "VALUES (:d_id, :type, :data, :z)");
 
     for (int i = 0; i < shapes.size(); ++i) {
+        query.prepare("INSERT INTO shapes (drawing_id, shape_type, z_order) "
+            "VALUES (:d_id, :type, :z) RETURNING id");
         query.bindValue(":d_id", id);
         query.bindValue(":type", (int)shapes[i]->getType());
-        query.bindValue(":data", serializeSingleShape(shapes[i]));
         query.bindValue(":z", i);
 
-        if (!query.exec()) {
-            qDebug() << "Error inserting shape:" << query.lastError();
-            m_db.rollback(); // Откатываем всё, если хоть одна фигура не вставилась
+        if (!query.exec() || !query.next()) {
+            qDebug() << "Error inserting master shape:" << query.lastError();
+            db.rollback();
+            return false;
+        }
+
+        int shapeId = query.value(0).toInt();
+
+        QSqlQuery detailQuery;
+        if (!shapes[i]->saveToSql(detailQuery, shapeId)) {
+            qDebug() << "Error inserting shape details:" << detailQuery.lastError();
+            db.rollback();
             return false;
         }
     }
 
-    return m_db.commit();
+    return db.commit();
 }
 
 QList<Shape*> Database::loadDrawing(int id) {
     QList<Shape*> shapes;
     QSqlQuery query;
-    query.prepare("SELECT shape_type, shape_data FROM shapes WHERE drawing_id = :id ORDER BY z_order ASC");
+    query.prepare("SELECT id, shape_type FROM shapes WHERE drawing_id = :id ORDER BY z_order ASC");
     query.bindValue(":id", id);
 
     if (query.exec()) {
         while (query.next()) {
-            Shape* s = Shape::createFromType(static_cast<Shape::Type>(query.value(0).toInt()));
+            int shapeId = query.value(0).toInt();
+            Shape::Type type = static_cast<Shape::Type>(query.value(1).toInt());
+
+            Shape* s = Shape::createFromType(type);
             if (s) {
-                QDataStream in(query.value(1).toByteArray());
-                s->deserialize(in);
-                shapes.append(s);
+                QSqlQuery detailQuery;
+                if (s->loadFromSql(detailQuery, shapeId)) {
+                    shapes.append(s);
+                }
+                else {
+                    qDebug() << "Failed to load details for shape ID:" << shapeId;
+                    delete s;
+                }
             }
         }
     }
@@ -142,23 +152,11 @@ bool Database::deleteDrawing(int id) {
     return query.exec();
 }
 
-QByteArray Database::serializeSingleShape(Shape* shape) {
-    QByteArray byteArray;
-    QBuffer buffer(&byteArray);
-    buffer.open(QIODevice::WriteOnly);
-    QDataStream out(&buffer);
-
-    shape->serialize(out);
-    return byteArray;
-}
-
 bool Database::clearDatabase() {
     QSqlQuery query;
-
     if (!query.exec("TRUNCATE drawings, shapes RESTART IDENTITY CASCADE")) {
         qDebug() << "Error clearing database:" << query.lastError();
         return false;
     }
-
     return true;
 }

@@ -135,14 +135,8 @@ public:
 
         QStringList displayList;
         for (const auto& info : items) {
-            int displayId = info.id - 1;
-
-            if (displayId == 0) {
-                displayList << info.name;
-            }
-            else {
-                displayList << QString("%1(%2)").arg(info.name).arg(displayId);
-            }
+            int displayId = info.id;
+            displayList << QString("%1(id: %2)").arg(info.name).arg(displayId);
         }
 
         bool ok;

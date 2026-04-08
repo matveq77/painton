@@ -34,7 +34,7 @@ public:
     bool clearDatabase();
 
 private:
-    QSqlDatabase m_db;
-    ConnectionDetails m_details;
+    QSqlDatabase db;
+    ConnectionDetails details;
     QByteArray serializeSingleShape(Shape* shape);
 };
