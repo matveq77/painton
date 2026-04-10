@@ -26,12 +26,13 @@ void Rectangle::deserialize(QDataStream& in) {
 }
 
 bool Rectangle::saveToSql(QSqlQuery& query, int shapeId) const {
-    query.prepare("INSERT INTO rect_data (shape_id, x, y, width, height) VALUES (?, ?, ?, ?, ?)");
-    query.addBindValue(shapeId);
-    query.addBindValue(rect_.x());
-    query.addBindValue(rect_.y());
-    query.addBindValue(rect_.width());
-    query.addBindValue(rect_.height());
+    query.prepare("INSERT INTO rect_data (shape_id, x, y, width, height)"
+        "VALUES (:id, :x, :y, :w, :h)");
+    query.bindValue(":id", shapeId);
+    query.bindValue(":x", rect_.x());
+    query.bindValue(":y", rect_.y());
+    query.bindValue(":w", rect_.width());
+    query.bindValue(":h", rect_.height());
     return query.exec();
 }
 

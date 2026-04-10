@@ -217,7 +217,7 @@ bool Database::deleteDrawing(int id) {
 
 bool Database::clearDatabase() {
     QSqlQuery query;
-    if (!query.exec("TRUNCATE drawings, shapes RESTART IDENTITY CASCADE")) {
+    if (!query.exec("TRUNCATE drawings, shapes, palette RESTART IDENTITY CASCADE")) {
         qDebug() << "Error clearing database:" << query.lastError();
         return false;
     }

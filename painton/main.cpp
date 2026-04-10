@@ -49,6 +49,7 @@ class PaintWidget : public QWidget {
     Q_OBJECT
 public:
     enum class Action { Draw, Move, Delete };
+
     PaintWidget(QWidget* parent = nullptr) : QWidget(parent), db({ "localhost", 5432, "painton", "postgres", "postgres" }) {
         drawing = false;
         currentAction = Action::Draw;
@@ -107,8 +108,45 @@ public:
     }
 
     void clearDatabase() { db.clearDatabase(); }
-    void saveToFile() {}
-    void loadFromFile() {}
+
+    void saveToFile() {
+        QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "Paint Files (*.pnt)");
+        if (fileName.isEmpty()) return;
+
+        QFile file(fileName);
+        if (file.open(QIODevice::WriteOnly)) {
+            QDataStream out(&file);
+            out << (int)shapes.size();
+            for (const auto& s : shapes) {
+                out << (int)s->getType();
+                s->serialize(out);
+            }
+        }
+    }
+
+    void loadFromFile() {
+        QString fileName = QFileDialog::getOpenFileName(this, "Open File", "", "Paint Files (*.pnt)");
+        if (fileName.isEmpty()) return;
+
+        QFile file(fileName);
+        if (file.open(QIODevice::ReadOnly)) {
+            qDeleteAll(shapes);
+            shapes.clear();
+            QDataStream in(&file);
+            int size;
+            in >> size;
+            for (int i = 0; i < size; ++i) {
+                int typeInt;
+                in >> typeInt;
+                Shape* s = Shape::createFromType(static_cast<Shape::Type>(typeInt));
+                if (s) {
+                    s->deserialize(in);
+                    shapes.append(s);
+                }
+            }
+            selectedShapeIndex = -1;
+        }
+    }
 
 signals:
     void paletteLoaded();
@@ -246,9 +284,13 @@ int main(int argc, char* argv[])
     topControlLayout->addWidget(btnClear);
     topControlLayout->addStretch();
 
+    QPushButton* btnSave = new QPushButton("Save(File)");
+    QPushButton* btnLoad = new QPushButton("Open(File)");
     QPushButton* btnSaveDb = new QPushButton("Save(Db)");
     QPushButton* btnLoadDb = new QPushButton("Open(Db)");
     QPushButton* btnClearDb = new QPushButton("Clear(Db)");
+    //topControlLayout->addWidget(btnSave);
+    //topControlLayout->addWidget(btnLoad);
     topControlLayout->addWidget(btnSaveDb);
     topControlLayout->addWidget(btnLoadDb);
     topControlLayout->addWidget(btnClearDb);
@@ -289,6 +331,8 @@ int main(int argc, char* argv[])
     QObject::connect(btnMove, &QPushButton::clicked, [=]() { paintArea->setMoveMode(); });
     QObject::connect(btnDel, &QPushButton::clicked, [=]() { paintArea->setDeleteMode(); });
     QObject::connect(btnClear, &QPushButton::clicked, [=]() { paintArea->clearAll(); });
+    QObject::connect(btnSave, &QPushButton::clicked, [=]() { paintArea->saveToFile(); });
+    QObject::connect(btnLoad, &QPushButton::clicked, [=]() { paintArea->loadFromFile(); });
     QObject::connect(btnSaveDb, &QPushButton::clicked, [=]() { paintArea->saveToDatabase(); });
     QObject::connect(btnLoadDb, &QPushButton::clicked, [=]() { paintArea->loadFromDatabase(); });
     QObject::connect(btnClearDb, &QPushButton::clicked, [=]() { paintArea->clearDatabase(); });
