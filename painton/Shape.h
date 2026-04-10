@@ -36,7 +36,11 @@ public:
 
     static Shape* createFromType(Type type);
 
+    void setColorIndex(int index) { colorIndex_ = index; }
+    int getColorIndex() const { return colorIndex_; }
+
 protected:
     Type type_;
+    int colorIndex_ = 0;
 };
 

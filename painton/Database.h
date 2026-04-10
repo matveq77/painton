@@ -27,7 +27,10 @@ public:
     bool open();
     void close();
 
-    bool saveDrawing(int& id, const QString& name, const QList<Shape*>& shapes);
+    void savePalette(const QVector<QColor>& palette);
+    QVector<QColor> loadPalette(int drawingId);
+
+    bool saveDrawing(int& id, const QString& name, const QList<Shape*>& shapes, const QVector<QColor>& palette);
     QList<Shape*> loadDrawing(int id);
     QList<DrawingInfo> getSavedDrawings();
     bool deleteDrawing(int id);

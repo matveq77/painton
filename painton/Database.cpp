@@ -5,6 +5,7 @@
 #include <QDataStream>
 #include <QBuffer>
 #include <QDebug>
+#include <QColor>
 
 Database::Database(const ConnectionDetails& details) : details(details) {
     db = QSqlDatabase::addDatabase("QPSQL");
@@ -22,15 +23,19 @@ Database::~Database() {
 bool Database::open() {
     if (!db.open()) return false;
 
+    //рисунки
     QSqlQuery query;
     query.exec("CREATE TABLE IF NOT EXISTS drawings (id SERIAL PRIMARY KEY, name TEXT);");
 
+    //мастерфигура
     query.exec("CREATE TABLE IF NOT EXISTS shapes ("
         "id SERIAL PRIMARY KEY, "
         "drawing_id INTEGER REFERENCES drawings(id) ON DELETE CASCADE, "
         "shape_type INTEGER, "
-        "z_order INTEGER);");
+        "z_order INTEGER, "
+        "color_index INTEGER DEFAULT 0);");
 
+    //фигуры
     query.exec("CREATE TABLE IF NOT EXISTS rect_data ("
         "shape_id INTEGER PRIMARY KEY REFERENCES shapes(id) ON DELETE CASCADE, "
         "x INTEGER, y INTEGER, width INTEGER, height INTEGER);");
@@ -47,6 +52,25 @@ bool Database::open() {
         "shape_id INTEGER PRIMARY KEY REFERENCES shapes(id) ON DELETE CASCADE, "
         "points_blob BYTEA);");
 
+    //цветы
+    query.exec("CREATE TABLE IF NOT EXISTS palette ("
+        "drawing_id INTEGER REFERENCES drawings(id) ON DELETE CASCADE, "
+        "color_index INTEGER, "
+        "color_hex TEXT, "
+        "PRIMARY KEY (drawing_id, color_index));");
+
+    query.exec("SELECT COUNT(*) FROM palette");
+    if (query.next() && query.value(0).toInt() == 0) {
+        QStringList defaultColors = { "#000000", "#FF0000", "#00FF00", "#0000FF",
+                                     "#FFFF00", "#FF00FF", "#00FFFF", "#FFA500" };
+        for (int i = 0; i < 8; ++i) {
+            query.prepare("INSERT INTO palette (id, color_hex) VALUES (:id, :color)");
+            query.bindValue(":id", i);
+            query.bindValue(":color", defaultColors[i]);
+            query.exec();
+        }
+    }
+
     return true;
 }
 
@@ -56,7 +80,7 @@ void Database::close() {
     }
 }
 
-bool Database::saveDrawing(int& id, const QString& name, const QList<Shape*>& shapes) {
+bool Database::saveDrawing(int& id, const QString& name, const QList<Shape*>& shapes, const QVector<QColor>& palette) {
     if (!db.transaction()) return false;
 
     QSqlQuery query;
@@ -84,11 +108,12 @@ bool Database::saveDrawing(int& id, const QString& name, const QList<Shape*>& sh
     }
 
     for (int i = 0; i < shapes.size(); ++i) {
-        query.prepare("INSERT INTO shapes (drawing_id, shape_type, z_order) "
-            "VALUES (:d_id, :type, :z) RETURNING id");
+        query.prepare("INSERT INTO shapes (drawing_id, shape_type, z_order, color_index) "
+            "VALUES (:d_id, :type, :z, :c_idx) RETURNING id");
         query.bindValue(":d_id", id);
         query.bindValue(":type", (int)shapes[i]->getType());
         query.bindValue(":z", i);
+        query.bindValue(":c_idx", shapes[i]->getColorIndex());
 
         if (!query.exec() || !query.next()) {
             qDebug() << "Error inserting master shape:" << query.lastError();
@@ -106,22 +131,60 @@ bool Database::saveDrawing(int& id, const QString& name, const QList<Shape*>& sh
         }
     }
 
+    QSqlQuery pQuery;
+    for (int i = 0; i < palette.size(); ++i) {
+        pQuery.prepare("INSERT INTO palette (drawing_id, color_index, color_hex) "
+            "VALUES (:d_id, :idx, :color) "
+            "ON CONFLICT (drawing_id, color_index) DO UPDATE SET color_hex = EXCLUDED.color_hex");
+        pQuery.bindValue(":d_id", id);
+        pQuery.bindValue(":idx", i);
+        pQuery.bindValue(":color", palette[i].name());
+        pQuery.exec();
+    }
+
     return db.commit();
+}
+
+void Database::savePalette(const QVector<QColor>& palette) {
+    QSqlQuery query;
+    for (int i = 0; i < palette.size(); ++i) {
+        query.prepare("UPDATE palette SET color_hex = :color WHERE id = :id");
+        query.bindValue(":id", i);
+        query.bindValue(":color", palette[i].name());
+        query.exec();
+    }
+}
+
+QVector<QColor> Database::loadPalette(int drawingId) {
+    QVector<QColor> palette(8, Qt::black);
+    QSqlQuery query;
+    query.prepare("SELECT color_index, color_hex FROM palette WHERE drawing_id = :id ORDER BY color_index ASC");
+    query.bindValue(":id", drawingId);
+
+    if (query.exec()) {
+        while (query.next()) {
+            int idx = query.value(0).toInt();
+            if (idx >= 0 && idx < 8) palette[idx] = QColor(query.value(1).toString());
+        }
+    }
+    return palette;
 }
 
 QList<Shape*> Database::loadDrawing(int id) {
     QList<Shape*> shapes;
     QSqlQuery query;
-    query.prepare("SELECT id, shape_type FROM shapes WHERE drawing_id = :id ORDER BY z_order ASC");
+    query.prepare("SELECT id, shape_type, color_index FROM shapes WHERE drawing_id = :id ORDER BY z_order ASC");
     query.bindValue(":id", id);
 
     if (query.exec()) {
         while (query.next()) {
             int shapeId = query.value(0).toInt();
             Shape::Type type = static_cast<Shape::Type>(query.value(1).toInt());
-
+            int colorIdx = query.value(2).toInt();
+                
             Shape* s = Shape::createFromType(type);
             if (s) {
+                s->setColorIndex(colorIdx);
                 QSqlQuery detailQuery;
                 if (s->loadFromSql(detailQuery, shapeId)) {
                     shapes.append(s);
